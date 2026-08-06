@@ -1,3 +1,13 @@
 spring:
   application:
     name: alma-matcher
+
+# alma-matcher props
+alma-matcher:
+  email-domains:
+    - studio.unibo.it
+    - unibo.it
+  username:
+    min-length: 3
+    max-length: 20
+    pattern: "^[a-z0-9_.]+$"
