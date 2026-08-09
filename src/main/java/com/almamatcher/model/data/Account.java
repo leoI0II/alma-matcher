@@ -155,4 +155,31 @@ public class Account {
     public Profile getProfile() {
         return this.profile;
     }
+
+    @Override
+    public boolean equals(final Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (!(o instanceof Account other)) {
+            return false;
+        }
+        return email != null && email.equals(other.email);
+    }
+
+    @Override
+    public int hashCode() {
+        return getClass().hashCode();
+    }
+
+    @Override
+    public String toString() {
+        return "Account{"
+            + "id=" + id
+            + ", email=" + email
+            + ", username=" + username
+            + ", status=" + status
+            + ", createdAt=" + createdAt
+            + '}';
+    }
 }

@@ -92,4 +92,30 @@ public class Profile {
         return this.account;
     }
 
+    @Override
+    public boolean equals(final Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (!(o instanceof Profile other)) {
+            return false;
+        }
+        return account != null && account.equals(other.account);
+    }
+
+    @Override
+    public int hashCode() {
+        return getClass().hashCode();
+    }
+
+    @Override
+    public String toString() {
+        return "Profile{"
+            + "id=" + id
+            + ", firstName=" + firstName
+            + ", lastName=" + lastName
+            + ", birthDate=" + birthDate
+            + '}';
+    }
+
 }
