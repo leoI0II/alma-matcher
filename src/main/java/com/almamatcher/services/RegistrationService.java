@@ -1,30 +1,67 @@
 package com.almamatcher.services;
 
+import java.time.LocalDate;
+import java.time.Period;
+
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import com.almamatcher.model.data.Account;
+import com.almamatcher.model.data.Profile;
 import com.almamatcher.model.data.RegistrationRequest;
+import com.almamatcher.model.exceptions.EmailAlreadyInUseException;
+import com.almamatcher.model.exceptions.NotAdultEnoughException;
 import com.almamatcher.model.exceptions.UsernameAlreadyTakenException;
 import com.almamatcher.repository.AccountRepository;
+import com.almamatcher.repository.ProfileRepository;
+
+import jakarta.transaction.Transactional;
 
 @Service
 public class RegistrationService {
     
     private final PasswordEncoder passwordEncoder;
     private final AccountRepository accountRepository;
+    private final ProfileRepository profileRepository;
 
     public RegistrationService(
         final PasswordEncoder passwordEncoder,
-        final AccountRepository accountRepository
+        final AccountRepository accountRepository,
+        final ProfileRepository profileRepository
     ) {
         this.passwordEncoder = passwordEncoder;
         this.accountRepository = accountRepository;
+        this.profileRepository = profileRepository;
     }
 
-    public void register(final RegistrationRequest request) throws UsernameAlreadyTakenException {
-        if (accountRepository.existsByUsername(request.username())) {
-            throw new UsernameAlreadyTakenException();
+    private boolean isAllowedByAge(final RegistrationRequest request) {
+        final var age = Period.between(request.birthDate(), LocalDate.now());
+        boolean isAdultEnough = age.getYears() >= 18;
+        return isAdultEnough;
+    }
+
+    private boolean alreadyExistsByEmail(final RegistrationRequest request) {
+        return accountRepository.existsByEmail(request.email());
+    }
+
+    private boolean alreadyExistsByUsername(final RegistrationRequest request) {
+        return accountRepository.existsByEmail(request.username());
+    }
+
+    private boolean isAllowedDomain(final RegistrationRequest request) {
+        
+    }
+
+    @Transactional
+    public void register(final RegistrationRequest request) {
+        if (alreadyExistsByUsername(request)) {
+            throw new UsernameAlreadyTakenException(request.username());
+        }
+        if (alreadyExistsByEmail(request)) {
+            throw new EmailAlreadyInUseException();
+        }
+        if (!isAllowedByAge(request)) {
+            throw new NotAdultEnoughException();
         }
         String passwordHash = passwordEncoder.encode(request.password());
         Account account = Account.createNewAccount(
@@ -33,6 +70,14 @@ public class RegistrationService {
             request.username()
         );
         accountRepository.save(account);
+
+        Profile profile = new Profile(
+            request.firstName(), 
+            request.lastName(), 
+            request.birthDate(), 
+            account
+        );
+        profileRepository.save(profile);
     }
 
 }
