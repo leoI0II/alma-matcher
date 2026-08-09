@@ -75,7 +75,7 @@ public class Account {
         final Instant createdAt,
         final Instant emailVerifiedAt,
         final Instant lastTimeOnlineAt,
-        final Instant usernameChangedAt,
+        final Instant usernameChangedAt
     ) {
         this.email = email;
         this.passwordHash = passwordHash;
@@ -90,7 +90,7 @@ public class Account {
     public static Account createNewAccount(
         final String email,
         final String passwordHash,
-        final String username,
+        final String username
     ) {
         return new Account(
             email,
