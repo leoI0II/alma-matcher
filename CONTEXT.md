@@ -847,3 +847,5 @@ separate projects: annotated JPA classes *are* the table definitions.
 3. Repositories, and a first run against a real database.
 4. **End-to-end email delivery test** to a real `@studio.unibo.it` address —
    until the code arrives, building anything else is pointless.
+5. LocalDate.now() in RegistrationService is not testable. Instead put Clock as bean
+   and use LocalDate.now(clock) so tests could use data.

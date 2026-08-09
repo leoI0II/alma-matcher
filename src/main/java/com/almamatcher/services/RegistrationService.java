@@ -6,10 +6,12 @@ import java.time.Period;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
+import com.almamatcher.config.AlmaMatcherProperties;
 import com.almamatcher.model.data.Account;
 import com.almamatcher.model.data.Profile;
 import com.almamatcher.model.data.RegistrationRequest;
 import com.almamatcher.model.exceptions.EmailAlreadyInUseException;
+import com.almamatcher.model.exceptions.EmailDomainNotAllowedException;
 import com.almamatcher.model.exceptions.NotAdultEnoughException;
 import com.almamatcher.model.exceptions.UsernameAlreadyTakenException;
 import com.almamatcher.repository.AccountRepository;
@@ -20,15 +22,18 @@ import jakarta.transaction.Transactional;
 @Service
 public class RegistrationService {
     
+    private final AlmaMatcherProperties properties;
     private final PasswordEncoder passwordEncoder;
     private final AccountRepository accountRepository;
     private final ProfileRepository profileRepository;
 
     public RegistrationService(
+        final AlmaMatcherProperties properties,
         final PasswordEncoder passwordEncoder,
         final AccountRepository accountRepository,
         final ProfileRepository profileRepository
     ) {
+        this.properties = properties;
         this.passwordEncoder = passwordEncoder;
         this.accountRepository = accountRepository;
         this.profileRepository = profileRepository;
@@ -48,8 +53,19 @@ public class RegistrationService {
         return accountRepository.existsByEmail(request.username());
     }
 
+    private String extractDomain(final String email) {
+        final int at = email.lastIndexOf('@');
+        if (at < 0 || at == email.length() - 1) {
+            throw new EmailDomainNotAllowedException(email);
+        }
+        return email.substring(at + 1);
+    }
+
     private boolean isAllowedDomain(final RegistrationRequest request) {
-        
+        return properties.emailDomains()
+                .contains(
+                    extractDomain(request.email())
+                );
     }
 
     @Transactional
@@ -62,6 +78,9 @@ public class RegistrationService {
         }
         if (!isAllowedByAge(request)) {
             throw new NotAdultEnoughException();
+        }
+        if (!isAllowedDomain(request)) {
+            throw new EmailDomainNotAllowedException(extractDomain(request.email()));
         }
         String passwordHash = passwordEncoder.encode(request.password());
         Account account = Account.createNewAccount(
