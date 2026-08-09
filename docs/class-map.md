@@ -1,6 +1,6 @@
 # Alma Matcher — Class Map
 
-Scope: everything under `src/main/java/com/almamatcher` as of 2026-08-09 — 9 source classes across 6 packages, covering the registration flow only (no web/controller layer yet).
+Scope: everything under `src/main/java/com/almamatcher` as of 2026-08-09 — 13 source classes across 6 packages, covering the registration flow only (no web/controller layer yet).
 
 ```mermaid
 classDiagram
@@ -61,7 +61,32 @@ classDiagram
         +LocalDate birthDate
     }
 
+    class AlmaMatcherProperties {
+        <<Record, ConfigurationProperties>>
+        +List~String~ emailDomains
+        +Username username
+    }
+
+    class Username {
+        <<Record, nested>>
+        +int minLength
+        +int maxLength
+        +String pattern
+    }
+
     class UsernameAlreadyTakenException {
+        <<Exception>>
+    }
+
+    class EmailAlreadyInUseException {
+        <<Exception>>
+    }
+
+    class NotAdultEnoughException {
+        <<Exception>>
+    }
+
+    class EmailDomainNotAllowedException {
         <<Exception>>
     }
 
@@ -69,12 +94,25 @@ classDiagram
         <<Repository Interface>>
         +findByEmail(String) Optional~Account~
         +existsByUsername(String) boolean
+        +existsByEmail(String) boolean
+    }
+
+    class ProfileRepository {
+        <<Repository Interface>>
+        +findByAccountId(UUID) Optional~Profile~
     }
 
     class RegistrationService {
         <<Service>>
+        -AlmaMatcherProperties properties
         -PasswordEncoder passwordEncoder
         -AccountRepository accountRepository
+        -ProfileRepository profileRepository
+        -isAllowedByAge(RegistrationRequest) boolean
+        -alreadyExistsByEmail(RegistrationRequest) boolean
+        -alreadyExistsByUsername(RegistrationRequest) boolean
+        -extractDomain(String) String
+        -isAllowedDomain(RegistrationRequest) boolean
         +register(RegistrationRequest) void
     }
 
@@ -93,13 +131,22 @@ classDiagram
 
     Account "1" -- "0..1" Profile : profile / account
     Account ..> AccountStatus : status
+    AlmaMatcherProperties *-- "1" Username : username
     AccountRepository --|> JpaRepository : extends
-    AccountRepository ..> Account : Account, UUID
+    AccountRepository ..> Account
+    ProfileRepository --|> JpaRepository : extends
+    ProfileRepository ..> Profile
     RegistrationService --> AccountRepository : accountRepository
+    RegistrationService --> ProfileRepository : profileRepository
     RegistrationService --> PasswordEncoder : passwordEncoder
+    RegistrationService --> AlmaMatcherProperties : properties
     RegistrationService ..> RegistrationRequest : register(request)
     RegistrationService ..> Account : createNewAccount()
+    RegistrationService ..> Profile : new Profile()
     RegistrationService ..> UsernameAlreadyTakenException : throws
+    RegistrationService ..> EmailAlreadyInUseException : throws
+    RegistrationService ..> NotAdultEnoughException : throws
+    RegistrationService ..> EmailDomainNotAllowedException : throws
     SecurityConfig ..> PasswordEncoder : @Bean BCryptPasswordEncoder
 ```
 
@@ -109,17 +156,18 @@ classDiagram
 |---|---|
 | `<<Entity>>` | JPA-mapped class, persisted via Hibernate (`Account`, `Profile`) |
 | `<<Enumeration>>` | Fixed value set (`AccountStatus`) |
-| `<<Record>>` | Immutable DTO used only in-memory (`RegistrationRequest`) |
+| `<<Record>>` | Immutable DTO used only in-memory (`RegistrationRequest`, `AlmaMatcherProperties`, `Username`) |
 | `<<Repository Interface>>` | Spring Data interface, no implementation written by hand |
 | `<<Service>>` | `@Service` business-logic component |
 | `<<Configuration>>` | `@Configuration` class providing beans |
-| `<<Exception>>` | Checked exception |
+| `<<Exception>>` | All four now unchecked (`extends RuntimeException`) |
 | `<<Spring Security>>` / `<<Spring Data>>` | Framework types outside this codebase, shown for context |
+
+`Account` and `Profile` also override `equals`/`hashCode`/`toString` (identity on `email` and `account` respectively) — omitted from the diagram as boilerplate.
 
 ## Field notes
 
-- **`RegistrationService.register(...)`** is likely a typo for `register` — worth renaming before a controller starts calling it.
-- **No web layer yet.** `RegistrationService` currently has no caller anywhere in `src/` — registration is only reachable directly (e.g. from a test).
-- **`UsernameAlreadyTakenException`** has no constructor or message, so a caller catching it learns nothing about which username collided.
-- **`Profile.birthDate`** is validated with `@Past` only — there's no minimum-age check, so a birth date of yesterday currently passes validation.
-- `RegistrationService.java` ends with a self-directed comment asking how `JpaRepository<T, ID>` generics resolve for `AccountRepository extends JpaRepository<Account, UUID>` — happy to walk through that if useful (short answer: `T` = the entity managed, `ID` = the type of its `@Id` field, so `Account` is the entity and `UUID` is `Account.id`'s type).
+- **Likely bug:** `RegistrationService.alreadyExistsByUsername(...)` calls `accountRepository.existsByEmail(request.username())` instead of `existsByUsername(...)` — it checks the *email* index with a username value, so a taken username with a free email currently slips past the check.
+- The four registration exceptions are unchecked now and `register()` no longer declares `throws` — nothing in the codebase catches them yet, so once a controller exists it'll need a shared handler (e.g. `@ControllerAdvice`) to turn them into HTTP responses.
+- `AlmaMatcherProperties.Username` validates `minLength`/`maxLength`/`pattern`, but nothing reads those fields — `RegistrationRequest.username` still hardcodes its own `@Size(min = 3, max = 20)` and regex independently.
+- Still no web layer — `RegistrationService.register(...)` has no caller anywhere in `src/`.
