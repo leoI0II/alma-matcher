@@ -5,6 +5,7 @@ import java.time.Period;
 
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import com.almamatcher.config.AlmaMatcherProperties;
 import com.almamatcher.model.data.Account;
@@ -16,8 +17,6 @@ import com.almamatcher.model.exceptions.NotAdultEnoughException;
 import com.almamatcher.model.exceptions.UsernameAlreadyTakenException;
 import com.almamatcher.repository.AccountRepository;
 import com.almamatcher.repository.ProfileRepository;
-
-import jakarta.transaction.Transactional;
 
 @Service
 public class RegistrationService {
@@ -39,18 +38,18 @@ public class RegistrationService {
         this.profileRepository = profileRepository;
     }
 
-    private boolean isAllowedByAge(final RegistrationRequest request) {
-        final var age = Period.between(request.birthDate(), LocalDate.now());
+    private boolean isAllowedByAge(final LocalDate birthDate) {
+        final var age = Period.between(birthDate, LocalDate.now());
         boolean isAdultEnough = age.getYears() >= 18;
         return isAdultEnough;
     }
 
-    private boolean alreadyExistsByEmail(final RegistrationRequest request) {
-        return accountRepository.existsByEmail(request.email());
+    private boolean alreadyExistsByEmail(final String email) {
+        return accountRepository.existsByEmail(email);
     }
 
-    private boolean alreadyExistsByUsername(final RegistrationRequest request) {
-        return accountRepository.existsByEmail(request.username());
+    private boolean alreadyExistsByUsername(final String username) {
+        return accountRepository.existsByUsername(username);
     }
 
     private String extractDomain(final String email) {
@@ -61,26 +60,25 @@ public class RegistrationService {
         return email.substring(at + 1);
     }
 
-    private boolean isAllowedDomain(final RegistrationRequest request) {
-        return properties.emailDomains()
-                .contains(
-                    extractDomain(request.email())
-                );
+    private boolean isAllowedDomain(final String domain) {
+        return properties.emailDomains().contains(domain);
     }
 
     @Transactional
     public void register(final RegistrationRequest request) {
-        if (alreadyExistsByUsername(request)) {
-            throw new UsernameAlreadyTakenException(request.username());
+        final String email = request.email().trim().toLowerCase();
+        final String domain = extractDomain(email);
+        if (!isAllowedDomain(domain)) {
+            throw new EmailDomainNotAllowedException(extractDomain(request.email()));
         }
-        if (alreadyExistsByEmail(request)) {
+        if (alreadyExistsByEmail(email)) {
             throw new EmailAlreadyInUseException();
         }
-        if (!isAllowedByAge(request)) {
+        if (!isAllowedByAge(request.birthDate())) {
             throw new NotAdultEnoughException();
         }
-        if (!isAllowedDomain(request)) {
-            throw new EmailDomainNotAllowedException(extractDomain(request.email()));
+        if (alreadyExistsByUsername(request.username())) {
+            throw new UsernameAlreadyTakenException(request.username());
         }
         String passwordHash = passwordEncoder.encode(request.password());
         Account account = Account.createNewAccount(
@@ -100,5 +98,3 @@ public class RegistrationService {
     }
 
 }
-
-// JpaRepository<T1, T2> dici che sia l entita e il tipo della sua chiave... non capisco cosa intendi. che Account sia valore (T1), e T2 e' la chiave? in questo caso dell ultimo esempio Account sia valore e UUID e' chiave? non ho capito..

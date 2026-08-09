@@ -108,11 +108,11 @@ classDiagram
         -PasswordEncoder passwordEncoder
         -AccountRepository accountRepository
         -ProfileRepository profileRepository
-        -isAllowedByAge(RegistrationRequest) boolean
-        -alreadyExistsByEmail(RegistrationRequest) boolean
-        -alreadyExistsByUsername(RegistrationRequest) boolean
+        -isAllowedByAge(LocalDate) boolean
+        -alreadyExistsByEmail(String) boolean
+        -alreadyExistsByUsername(String) boolean
         -extractDomain(String) String
-        -isAllowedDomain(RegistrationRequest) boolean
+        -isAllowedDomain(String) boolean
         +register(RegistrationRequest) void
     }
 
@@ -167,7 +167,6 @@ classDiagram
 
 ## Field notes
 
-- **Likely bug:** `RegistrationService.alreadyExistsByUsername(...)` calls `accountRepository.existsByEmail(request.username())` instead of `existsByUsername(...)` — it checks the *email* index with a username value, so a taken username with a free email currently slips past the check.
 - The four registration exceptions are unchecked now and `register()` no longer declares `throws` — nothing in the codebase catches them yet, so once a controller exists it'll need a shared handler (e.g. `@ControllerAdvice`) to turn them into HTTP responses.
 - `AlmaMatcherProperties.Username` validates `minLength`/`maxLength`/`pattern`, but nothing reads those fields — `RegistrationRequest.username` still hardcodes its own `@Size(min = 3, max = 20)` and regex independently.
 - Still no web layer — `RegistrationService.register(...)` has no caller anywhere in `src/`.
