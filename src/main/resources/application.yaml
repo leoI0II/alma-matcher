@@ -2,6 +2,19 @@ spring:
   application:
     name: alma-matcher
 
+  datasource:
+    url: jdbc:postgresql://localhost:5432/almamatcher
+    username: almamatcher
+    password: devpassword
+
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    properties:
+      hibernate:
+        format_sql: true
+    show-sql: true
+
 # alma-matcher props
 alma-matcher:
   email-domains:
