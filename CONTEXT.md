@@ -849,3 +849,7 @@ separate projects: annotated JPA classes *are* the table definitions.
    until the code arrives, building anything else is pointless.
 5. LocalDate.now() in RegistrationService is not testable. Instead put Clock as bean
    and use LocalDate.now(clock) so tests could use data.
+6. For PRIVACY, add the email noreply mail if the requested email in the REGISTRATION FORM 
+   already exists, so the guy who's trying to register with this mail will not know this 
+   sensible data.
+7. Once the real registrations will be on, ENABLE CSRF protection and for cookies.
