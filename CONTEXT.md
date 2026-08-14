@@ -1,7 +1,8 @@
 # AlmaMatcher — Project Context
 
 Context document for the assistant (Claude Code) and for myself.
-**Status:** project scaffolded, domain model in progress (`Account`, `Profile`).
+**Status:** registration flow works end to end — `POST /api/auth/register`
+returns 201 and writes `account` + `profile` rows to PostgreSQL.
 
 ---
 
@@ -81,6 +82,7 @@ is a layer on top.
 | Build | Gradle (Kotlin DSL) |
 | Packaging | Jar |
 | Config | YAML |
+| Local DB | Docker Compose (`postgres:17`) |
 | Frontend | undecided; mobile-first PWA |
 | Hosting | EU VPS (Hetzner), Docker Compose |
 
@@ -130,6 +132,49 @@ Created by Initializr; Spring looks in them automatically.
 Only needed for server-side rendering. With a separate SPA the backend returns
 JSON and `templates` goes unused. Decision deferred.
 
+### Docker and the local database
+
+A **container** is an isolated process carrying its own filesystem and
+libraries. Unlike a VM it shares the host kernel, so it starts in seconds
+instead of a minute. An **image** (`postgres:17`) is the template; the container
+is the running instance.
+
+**Compose** is just a long `docker run` command written as YAML — and it scales
+to several services later (Redis, MinIO) starting together with one command.
+
+`compose.yaml` at the project root:
+
+```yaml
+services:
+  postgres:
+    image: postgres:17
+    container_name: alma-matcher-db
+    environment:
+      POSTGRES_DB: almamatcher
+      POSTGRES_USER: almamatcher
+      POSTGRES_PASSWORD: devpassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
+```
+
+- **`ports: "5432:5432"`** — `host:container`. Without it the container is
+  sealed and the app can't reach `localhost:5432`.
+- **`volumes: pgdata:...`** — a container's filesystem is ephemeral. The named
+  volume is what survives `docker compose down`.
+
+The same file (plus the app as a second service) is what will run on the VPS —
+which is why it's worth learning now: one tool covers dev and deploy.
+
+**Kubernetes is a different thing, a layer above.** It orchestrates hundreds of
+containers across many machines — scheduling, restarts, scaling, rolling
+deploys. Irrelevant here: one VPS with Compose handles thousands of users. Worth
+knowing it exists, not worth learning now.
+
 ---
 
 ## 4. Architectural decisions
@@ -160,9 +205,17 @@ reconnection, separate auth over WS, and a client library. Too many unfamiliar
 things at once. Upgrading later breaks almost nothing — same table, same logic,
 only the delivery mechanism changes.
 
-### Migrations: Flyway from the first commit
+### Migrations: Flyway before the first real user
 
-`spring.jpa.hibernate.ddl-auto=validate`, never `update`.
+Target state: `ddl-auto: validate` plus versioned Flyway migrations. Never
+`update` — it applies schema changes implicitly and silently.
+
+**Right now** the setting is `create-drop`: the schema is rebuilt at every
+start. While the model still changes hourly, writing a migration per edit costs
+time and buys nothing. Test data is lost on restart, which doesn't matter yet.
+
+Switch to Flyway once the entities stabilise — and definitely before any real
+data exists.
 
 ### Email — critical risk, verify on day one
 
@@ -295,6 +348,118 @@ be interfaces rather than abstract classes. Side benefit: tests can supply a
 
 Complex queries, where the method name would become unreadable, are written by
 hand with `@Query`.
+
+### The web layer
+
+An **endpoint** is one HTTP method + path pair the server answers. `GET /api/events`
+and `POST /api/events` are two different endpoints despite the same path.
+
+URL convention:
+
+```
+POST /api/auth/register     POST /api/auth/login
+GET  /api/auth/verify       GET  /api/profiles/{username}
+```
+
+`/api/...` separates JSON endpoints from any future HTML pages and allows
+applying CORS, rate limiting or logging to the whole group. `/auth/...` groups
+identity-related endpoints, which makes the security rules a single line.
+
+```java
+@RestController
+@RequestMapping("/api/auth")
+public class RegistrationController {
+
+    private final RegistrationService registrationService;
+
+    public RegistrationController(final RegistrationService registrationService) {
+        this.registrationService = registrationService;
+    }
+
+    @PostMapping("/register")
+    @ResponseStatus(HttpStatus.CREATED)
+    public void register(@Valid @RequestBody final RegistrationRequest request) {
+        registrationService.register(request);
+    }
+}
+```
+
+- `@RestController` — a `@Controller` returning data (JSON) rather than template names
+- `@RequestBody` — deserialise the JSON body into the DTO (Jackson, bundled with `starter-web`)
+- **`@Valid`** — run the DTO's Bean Validation *before* entering the method.
+  **Without it the annotations don't run at all.** Most common omission.
+- `@ResponseStatus(HttpStatus.CREATED)` — 201 instead of 200
+
+The controller does no logic: receive, validate, delegate.
+
+**GET vs POST.** GET reads and is repeatable and cacheable; its parameters live
+in the URL. POST creates or acts, carries a body, and is not repeatable.
+Registration must be POST — a GET would put the password in the URL, and URLs
+end up in browser history, server logs and the `Referer` header.
+
+### Exception handling
+
+The four registration exceptions are unchecked and nobody catches them, so
+without a handler they'd all surface as 500. One central class translates them:
+
+```java
+@RestControllerAdvice
+public class RegistrationExceptionHandler {
+
+    @ExceptionHandler({UsernameAlreadyTakenException.class, EmailAlreadyInUseException.class})
+    @ResponseStatus(HttpStatus.CONFLICT)          // 409
+    public Map<String, Object> handleConflict(final RuntimeException ex) { ... }
+
+    @ExceptionHandler({NotAdultEnoughException.class, EmailDomainNotAllowedException.class})
+    @ResponseStatus(HttpStatus.BAD_REQUEST)       // 400
+    public Map<String, Object> handleBadRequest(final RuntimeException ex) { ... }
+}
+```
+
+**Unchecked exceptions are the Spring convention** for two reasons: a
+`@RestControllerAdvice` handles them centrally so no `try/catch` is scattered
+around, and — critically — **`@Transactional` only rolls back automatically on
+unchecked exceptions.** On checked ones it commits by default.
+
+**Import trap:** use `org.springframework.transaction.annotation.Transactional`,
+not `jakarta.transaction.Transactional`. Both compile; Spring's has `readOnly`,
+`propagation`, `isolation` and integrates properly.
+
+### Security configuration
+
+```java
+@Bean
+public SecurityFilterChain filterChain(final HttpSecurity http) throws Exception {
+    return http
+        .csrf(csrf -> csrf.disable())
+        .authorizeHttpRequests(auth -> auth
+            .requestMatchers("/api/auth/**", "/error").permitAll()
+            .anyRequest().authenticated()
+        )
+        .build();
+}
+```
+
+Spring Security is a **chain of filters** in front of the controllers; every
+request passes through them. This bean describes that chain — without it, the
+default configuration locks everything behind a login form.
+
+- `.permitAll()` on `/api/auth/**` — you can't require a login in order to register.
+- **`/error` must be whitelisted too.** On a failed request Spring forwards
+  internally to `/error` to build the response; if that path is protected the
+  forward is blocked and the client gets an empty **403 instead of a 400** with
+  the actual message. Confusing symptom, trivial cause.
+- `.anyRequest().authenticated()` — a **whitelist**: list what's open, everything
+  else is closed. Every new endpoint is protected by default. A blacklist would
+  leave new endpoints exposed until remembered.
+
+**Response headers** Spring Security adds automatically: `X-Frame-Options: DENY`
+(no embedding in an iframe — anti-clickjacking), `X-Content-Type-Options:
+nosniff` (don't guess file types), `Cache-Control: no-store` (never cache
+personal data), `X-XSS-Protection: 0` (disables an old browser filter that
+caused more harm than good).
+
+`csrf.disable()` is temporary — see the deferred list.
 
 ---
 
@@ -592,6 +757,81 @@ browser → RegistrationRequest → validation → service
                                       Account + Profile → DB
 ```
 
+### `RegistrationService`
+
+Order of checks in `register(...)`, all inside `@Transactional`:
+
+1. **Normalise the email once, at the top** — `request.email().trim().toLowerCase()`.
+   Every later check must use that variable. Checking the raw value and saving
+   the normalised one means `Mario@...` passes the duplicate check and then
+   explodes on the DB constraint at `save()`.
+2. Email domain in `properties.emailDomains()`
+3. Email not already registered
+4. Username not taken
+5. Age ≥ 18
+6. Hash the password, create `Account`, save, create `Profile`, save
+
+**`@Transactional` is mandatory here.** Two separate `save()` calls without it
+are two transactions: if the second fails, an `Account` exists with no
+`Profile` — a registered user who exists nowhere. Rule: any service method
+writing more than one row is `@Transactional`.
+
+**Extracting the domain:**
+
+```java
+final int at = email.lastIndexOf('@');
+return email.substring(at + 1);
+```
+
+`lastIndexOf`, not `indexOf` — a quoted local part may legally contain `@`
+(`"weird@name"@studio.unibo.it`). Never seen in practice, but it costs nothing
+to be right. And compare the extracted domain exactly against the list, not
+`endsWith("unibo.it")` — that would accept `mario@fake-unibo.it`.
+
+Consequence: subdomains aren't covered. If UniBo turns out to use others, they
+go in the YAML list — which is exactly why the list lives in config.
+
+### Custom validation: `@MinimumAge`
+
+`@Past` only checks the date is in the past — someone born yesterday passes.
+Age checks aren't a standard Bean Validation constraint, so it's a custom one:
+
+```java
+@Target(ElementType.FIELD)
+@Retention(RetentionPolicy.RUNTIME)
+@Constraint(validatedBy = MinimumAgeValidator.class)
+public @interface MinimumAge {
+    int value();
+    String message() default "You must be at least {value} years old";
+    Class<?>[] groups() default {};
+    Class<? extends Payload>[] payload() default {};
+}
+```
+
+```java
+public class MinimumAgeValidator implements ConstraintValidator<MinimumAge, LocalDate> {
+    private int minimumAge;
+
+    @Override public void initialize(MinimumAge annotation) {
+        this.minimumAge = annotation.value();
+    }
+
+    @Override public boolean isValid(LocalDate birthDate, ConstraintValidatorContext ctx) {
+        if (birthDate == null) return true;      // @NotNull's job
+        return Period.between(birthDate, LocalDate.now()).getYears() >= minimumAge;
+    }
+}
+```
+
+Why in the DTO rather than the service: the error comes back **together with
+all other validation errors**, in one uniform response. With a service
+exception the user fixes the format errors, retries, and only then learns
+they're too young — an extra round trip.
+
+**Bean Validation is server-side and is the only trustworthy check** — anyone
+can bypass the browser with curl. Client-side validation (HTML5 `max`,
+JavaScript) is for instant feedback only. Always both, never only the client.
+
 In the other direction, a `ProfileResponse` carries name, photos and username —
 the email simply isn't in it. Same protection the `Account`/`Profile` split
 gives, applied at the network boundary.
@@ -673,6 +913,19 @@ spring:
   application:
     name: alma-matcher
 
+  datasource:
+    url: jdbc:postgresql://localhost:5432/almamatcher
+    username: almamatcher
+    password: devpassword
+
+  jpa:
+    hibernate:
+      ddl-auto: create-drop      # temporary — see migrations
+    properties:
+      hibernate:
+        format_sql: true
+    show-sql: true
+
 # alma-matcher props
 alma-matcher:
   email-domains:
@@ -684,6 +937,15 @@ alma-matcher:
     pattern: "^[a-z0-9_.]+$"
 ```
 
+`show-sql: true` prints every query Hibernate generates — very useful while
+learning, noisy later. The `?` placeholders are **prepared statement
+parameters**: values travel separately from the SQL text, which is what makes
+SQL injection impossible.
+
+Plaintext credentials are fine while this is local and the values are
+dev-only. On deploy they become environment variables
+(`SPRING_DATASOURCE_PASSWORD` etc.).
+
 **`alma-matcher` is a root key**, at zero indentation, a sibling of `spring` and
 not nested inside it. YAML nesting is determined **only** by indentation; move
 it under `spring.application` and the property becomes
@@ -691,12 +953,47 @@ it under `spring.application` and the property becomes
 
 Indent with 2 spaces (YAML convention; with 4, deep nesting runs off the screen).
 
-Read it through `@ConfigurationProperties(prefix = "alma-matcher")` into a typed
-class (getters and setters required), not through scattered `@Value`.
+Read through `@ConfigurationProperties(prefix = "alma-matcher")` into a typed
+`record`, not scattered `@Value`. With a record Spring uses **constructor
+binding**, so no getters or setters are needed (a normal class would need them).
 
-Until that class exists, the IDE underlines the properties as unknown — that's
-normal and doesn't affect anything. Once it exists, the
-`configuration-processor` generates metadata and autocomplete starts working.
+```java
+@Validated
+@ConfigurationProperties(prefix = "alma-matcher")
+public record AlmaMatcherProperties(
+    @NotEmpty List<String> emailDomains,
+    @NotNull @Valid Username username
+) {
+    public record Username(
+        @Min(3) int minLength,
+        @Min(3) int maxLength,
+        @NotBlank String pattern
+    ) {}
+}
+```
+
+**Relaxed binding** maps `email-domains` → `emailDomains` automatically.
+
+**The class does nothing until registered.** Add `@ConfigurationPropertiesScan`
+on the main application class — once, and every future properties record works
+automatically. (The alternative, `@EnableConfigurationProperties(X.class)`,
+must list each class by hand.)
+
+`@Validated` makes the app **fail at startup** with a clear message if the YAML
+is missing a key. Without it, it starts with a null list and crashes on the
+first registration — in production.
+
+Note: `AlmaMatcherProperties.Username` is validated but **nothing reads it yet** —
+`RegistrationRequest` still hardcodes its own `@Size` and regex independently.
+Either wire it up or drop it.
+
+`@Configuration` and `@ConfigurationProperties` are unrelated despite the names:
+the first declares a class holding `@Bean` factory methods, the second fills a
+class's fields from the YAML.
+
+Until the properties class exists the IDE underlines the keys as unknown —
+harmless. Once it does, `configuration-processor` generates metadata and
+autocomplete starts working.
 
 **Domains as a list:** UniBo master's and PhD students use `@unibo.it`; locally
 it's convenient to add my own address for testing.
@@ -770,6 +1067,16 @@ project is not affiliated with the university.
 | **PII** | Personally Identifiable Information. |
 | **N+1** | One query for a list plus one query per element. The main cause of slow JPA code. |
 | **Starter** | An empty Spring Boot package that pulls in a coherent set of libraries. |
+| **Endpoint** | One HTTP method + path pair the server answers. |
+| **Tomcat** | The HTTP server: opens port 8080, parses requests, hands them to Spring. Boot embeds it in the process, which is why `main()` never returns. Jetty and Undertow are drop-in alternatives. |
+| **curl** | Command-line HTTP client. `-X` method, `-H` header, `-d` body, `-i` show status line, `-v` verbose. Downloading a file with curl is just a GET. |
+| **URI vs URL** | Every URL is a URI. A URL also says *how and where* to reach the resource (`https://...`); a bare URI may only identify it (`urn:isbn:...`). Interchangeable in practice on the web. |
+| **CSRF** | Cross-Site Request Forgery: a malicious page triggers a request to your site, and the browser attaches the session cookie automatically. Defended with a per-session token the attacker can't read. |
+| **Whitelist / blacklist** | Whitelist = list what's allowed, deny the rest (secure default). Blacklist = the opposite (one forgotten entry is a hole). |
+| **Container** | An isolated process with its own filesystem, sharing the host kernel. Lighter and faster than a VM. |
+| **Image** | The template a container is created from (`postgres:17`). |
+| **Volume** | Docker-managed disk space that outlives the container. Without it, database data disappears on `down`. |
+| **Kubernetes** | Orchestrates many containers across many machines. A layer above Docker; not needed here. |
 
 ---
 
@@ -818,38 +1125,134 @@ separate projects: annotated JPA classes *are* the table definitions.
 - Editor is VS Code. After changing dependencies: *Java: Clean Java Language
   Server Workspace*, or `./gradlew build`.
 
+### Running it
+
+```fish
+docker compose up -d          # start the database in the background
+./gradlew bootRun             # start the app — it does NOT exit, Ctrl+C to stop
+```
+
+`bootRun` staying alive is correct: a web server listens until stopped. Use a
+second terminal to test.
+
+On Arch/CachyOS the Compose plugin is a separate package: `sudo pacman -S
+docker-compose`. The daemon needs `sudo systemctl enable --now docker`, and
+`sudo usermod -aG docker $USER` (then log out and back in) avoids `sudo` every
+time — note that group is effectively root access.
+
+Other useful commands: `docker compose ps`, `docker compose logs -f postgres`,
+`docker compose down` (keeps data), `docker compose down -v` (wipes the volume).
+
+### Inspecting the database
+
+```fish
+docker exec -it alma-matcher-db psql -U almamatcher -d almamatcher
+```
+
+```sql
+\dt                 -- list tables
+\d account          -- structure: types, constraints, indexes
+SELECT id, email, username, status, created_at FROM account;
+\q
+```
+
+Worth looking at once: `status` stored as `WAIT_FOR_EMAIL_VERIFICATION` in full
+(proof `@Enumerated(EnumType.STRING)` works — the default would store an
+unreadable `0`), and `password_hash` as a 60-char BCrypt string with no trace of
+the original password.
+
+### Testing registration
+
+```fish
+curl -i -X POST http://localhost:8080/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"mario.rossi@studio.unibo.it","username":"mario_r",
+       "password":"unapasswordlunga","firstName":"Mario","lastName":"Rossi",
+       "birthDate":"2003-04-15"}'
+```
+
+Cases to check: valid → **201**; repeat → **409**; `@gmail.com` → **400**;
+`birthDate: "2015-01-01"` → **400**; short password → **400**.
+
+### Reading Spring stack traces
+
+They run to hundreds of lines. Either scroll from the top to the first readable
+`WARN`/`ERROR` line, or read from the bottom for the first `Caused by`. The
+`at org.hibernate...` frames are internal and almost never useful.
+
+Example: `Connection to localhost:5432 refused` on line 30 was the real cause;
+the 130 lines of "Unable to determine Dialect" below it were consequences.
+
 ---
 
-## 14. Status
+## 14. Learning resources
+
+1. **[MDN's HTTP guide](https://developer.mozilla.org/en-US/docs/Web/HTTP)** —
+   free, and the foundation for everything else. Methods, status codes, headers,
+   cookies, CORS. Without it Spring looks like arbitrary magic. Also the best
+   preparation for next semester's Web course.
+2. **"Spring Start Here" — Laurentiu Spilca.** Starts from the container and
+   beans; doesn't assume dependency injection is already familiar.
+3. **"Spring Security in Action" — same author.** Sessions, authentication,
+   CSRF, filters. Read it when the real login arrives.
+4. **"High-Performance Java Persistence" — Vlad Mihalcea.** JPA/Hibernate in
+   depth; more advanced, worth a few months from now. His blog is the best free
+   Hibernate resource anywhere.
+
+Books target Boot 3 while this project is on 4 — concepts identical, occasional
+API differences.
+
+Note: **Next.js is frontend**, not an alternative to Spring. In a typical modern
+stack they coexist — a JS framework in the browser, a backend serving the API.
+
+---
+
+## 15. Status
 
 - [x] Project scaffolded (Spring Initializr, Gradle Kotlin DSL, Boot 4.1.0, Java 21)
 - [x] `application.yaml` with base properties
 - [x] README for GitHub
-- [x] `AccountStatus`, `Account`, `Profile` — drafted
-- [ ] `SecurityConfig` with `PasswordEncoder`
-- [ ] `@ConfigurationProperties` class for `alma-matcher.*`
-- [ ] `equals` / `hashCode` by `id` on entities
-- [ ] Repositories (`AccountRepository`, `ProfileRepository`)
-- [ ] PostgreSQL connection
-- [ ] Flyway
-- [ ] `RegistrationRequest` + `RegistrationService`
-- [ ] Email verification (end-to-end delivery test)
-- [ ] Controllers
+- [x] `AccountStatus`, `Account`, `Profile` entities (with `equals`/`hashCode`)
+- [x] `SecurityConfig` with `PasswordEncoder` and `SecurityFilterChain`
+- [x] `AlmaMatcherProperties` via `@ConfigurationProperties`
+- [x] `AccountRepository`, `ProfileRepository`
+- [x] PostgreSQL via Docker Compose, connected
+- [x] `RegistrationRequest` DTO with `@MinimumAge(18)`
+- [x] `RegistrationService` — domain check, duplicates, age, hashing, `@Transactional`
+- [x] Four registration exceptions (unchecked) + `@RestControllerAdvice`
+- [x] `RegistrationController` — **`POST /api/auth/register` returns 201** ✅
+- [ ] Email verification (token, sending, confirm endpoint)
+- [ ] Login / logout
+- [ ] Flyway (once entities stabilise)
+- [ ] Profile endpoints
 - [ ] Events
 - [ ] Votes and matches
 - [ ] Chat
 - [ ] Frontend
 
-### Next steps
+### Deferred — decided but not done
 
-1. Finish `Account` / `Profile`, add `equals` / `hashCode` by `id`.
-2. Run PostgreSQL in Docker, wire it into `application.yaml`.
-3. Repositories, and a first run against a real database.
-4. **End-to-end email delivery test** to a real `@studio.unibo.it` address —
-   until the code arrives, building anything else is pointless.
-5. LocalDate.now() in RegistrationService is not testable. Instead put Clock as bean
-   and use LocalDate.now(clock) so tests could use data.
-6. For PRIVACY, add the email noreply mail if the requested email in the REGISTRATION FORM 
-   already exists, so the guy who's trying to register with this mail will not know this 
-   sensible data.
-7. Once the real registrations will be on, ENABLE CSRF protection and for cookies.
+Each of these was a conscious decision to postpone, not an oversight.
+
+1. **Injectable `Clock`.** `LocalDate.now()` in the age check reads system time,
+   so "what happens on the day someone turns 18" can't be tested. Register a
+   `Clock` bean and use `LocalDate.now(clock)`.
+2. **User enumeration on registration.** Replying "this email is already
+   registered" lets anyone check whether a specific person uses AlmaMatcher —
+   and institutional addresses are guessable (`name.surname@studio.unibo.it`).
+   On a dating app that's sensitive. Standard fix: always reply "we've sent you
+   an email", and if the address already exists send *that mailbox* a "someone
+   tried to register with your address" notice. The real owner understands;
+   a prober learns nothing. Username collisions can stay explicit — usernames
+   are public by design.
+3. **Re-enable CSRF** before any real session-based login exists. Currently
+   disabled only so curl can POST without fetching a token first.
+4. **Flyway + `ddl-auto: validate`** before any real data exists.
+5. **`AlmaMatcherProperties.Username` is unused** — `RegistrationRequest`
+   duplicates the constraints. Wire it or delete it.
+
+### Next step
+
+**Email verification, end to end.** The riskiest part of the whole project:
+until a code actually lands in a real `@studio.unibo.it` inbox, everything else
+is built on an assumption. Test delivery before building the token flow.
