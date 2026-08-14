@@ -67,7 +67,7 @@ public class RegistrationService {
     @Transactional
     public void register(final RegistrationRequest request) {
         final String email = request.email().trim().toLowerCase();
-        final String domain = extractDomain(email);
+        final String domain = extractDomain(email).trim().toLowerCase();
         if (!isAllowedDomain(domain)) {
             throw new EmailDomainNotAllowedException(extractDomain(request.email()));
         }
