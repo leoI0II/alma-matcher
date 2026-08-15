@@ -24,3 +24,6 @@ alma-matcher:
     min-length: 3
     max-length: 20
     pattern: "^[a-z0-9_.]+$"
+  email-verification:
+    token-validity: 24h
+    base-url: http://localhost:8080

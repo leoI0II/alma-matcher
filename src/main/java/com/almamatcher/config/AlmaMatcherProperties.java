@@ -1,5 +1,6 @@
 package com.almamatcher.config;
 
+import java.time.Duration;
 import java.util.List;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -19,11 +20,18 @@ public record AlmaMatcherProperties(
     List<String> emailDomains,
 
     @NotNull @Valid
-    Username username
+    Username username,
+
+    @NotNull @Valid
+    EmailVerification emailVerification
 ){
     public record Username(
         @Min(3) int minLength,
         @Min(3) int maxLength,
         @NotBlank String pattern
+    ){}
+    public record EmailVerification(
+        @NotNull Duration tokenValidity,
+        @NotBlank String baseUrl
     ){}
 }
