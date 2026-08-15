@@ -1,14 +1,18 @@
 package com.almamatcher.services;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.Period;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.almamatcher.config.AlmaMatcherProperties;
+import com.almamatcher.events.AccountRegisteredEvent;
 import com.almamatcher.model.data.Account;
+import com.almamatcher.model.data.EmailVerificationToken;
 import com.almamatcher.model.data.Profile;
 import com.almamatcher.model.data.RegistrationRequest;
 import com.almamatcher.model.exceptions.EmailAlreadyInUseException;
@@ -16,7 +20,9 @@ import com.almamatcher.model.exceptions.EmailDomainNotAllowedException;
 import com.almamatcher.model.exceptions.NotAdultEnoughException;
 import com.almamatcher.model.exceptions.UsernameAlreadyTakenException;
 import com.almamatcher.repository.AccountRepository;
+import com.almamatcher.repository.EmailVerificationTokenRepository;
 import com.almamatcher.repository.ProfileRepository;
+import com.almamatcher.util.TokenGenerator;
 
 @Service
 public class RegistrationService {
@@ -25,17 +31,26 @@ public class RegistrationService {
     private final PasswordEncoder passwordEncoder;
     private final AccountRepository accountRepository;
     private final ProfileRepository profileRepository;
+    private final TokenGenerator tokenGenerator;
+    private final EmailVerificationTokenRepository tokenRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
     public RegistrationService(
         final AlmaMatcherProperties properties,
         final PasswordEncoder passwordEncoder,
         final AccountRepository accountRepository,
-        final ProfileRepository profileRepository
+        final ProfileRepository profileRepository,
+        final TokenGenerator tokenGenerator,
+        final EmailVerificationTokenRepository tokenRepository,
+        final ApplicationEventPublisher eventPublisher
     ) {
         this.properties = properties;
         this.passwordEncoder = passwordEncoder;
         this.accountRepository = accountRepository;
         this.profileRepository = profileRepository;
+        this.tokenGenerator = tokenGenerator;
+        this.tokenRepository = tokenRepository;
+        this.eventPublisher = eventPublisher;
     }
 
     private boolean isAllowedByAge(final LocalDate birthDate) {
@@ -69,7 +84,7 @@ public class RegistrationService {
         final String email = request.email().trim().toLowerCase();
         final String domain = extractDomain(email).trim().toLowerCase();
         if (!isAllowedDomain(domain)) {
-            throw new EmailDomainNotAllowedException(extractDomain(request.email()));
+            throw new EmailDomainNotAllowedException(domain);
         }
         if (alreadyExistsByEmail(email)) {
             throw new EmailAlreadyInUseException();
@@ -82,7 +97,7 @@ public class RegistrationService {
         }
         String passwordHash = passwordEncoder.encode(request.password());
         Account account = Account.createNewAccount(
-            request.email().toLowerCase(), 
+            email, 
             passwordHash, 
             request.username()
         );
@@ -95,6 +110,19 @@ public class RegistrationService {
             account
         );
         profileRepository.save(profile);
+
+        final Instant now = Instant.now();
+        final EmailVerificationToken token = EmailVerificationToken.of(
+            account,
+            tokenGenerator.generate(),
+            now,
+            now.plus(properties.emailVerification().tokenValidity())
+        );
+        tokenRepository.save(token);
+
+        eventPublisher.publishEvent(
+            new AccountRegisteredEvent(account.getEmail(), token.getToken())
+        );
     }
 
 }
