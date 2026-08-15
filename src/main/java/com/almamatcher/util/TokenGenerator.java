@@ -1,4 +1,4 @@
-package com.almamatcher.model.data.generator;
+package com.almamatcher.util;
 
 import java.security.SecureRandom;
 import java.util.Base64;

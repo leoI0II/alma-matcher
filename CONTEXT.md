@@ -1250,6 +1250,8 @@ Each of these was a conscious decision to postpone, not an oversight.
 4. **Flyway + `ddl-auto: validate`** before any real data exists.
 5. **`AlmaMatcherProperties.Username` is unused** — `RegistrationRequest`
    duplicates the constraints. Wire it or delete it.
+6. Put the @Primary annotation or Profile("dev"/"prod") to the email sender service.
+
 
 ### Next step
 
