@@ -156,6 +156,11 @@ public class Account {
         return this.profile;
     }
 
+    public void verifyEmail() {
+        this.emailVerifiedAt = Instant.now();
+        this.status = AccountStatus.ACTIVE;
+    }
+
     @Override
     public boolean equals(final Object o) {
         if (this == o) {

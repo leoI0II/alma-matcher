@@ -3,6 +3,7 @@ package com.almamatcher.services;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.Period;
+import java.util.List;
 
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -17,6 +18,8 @@ import com.almamatcher.model.data.Profile;
 import com.almamatcher.model.data.RegistrationRequest;
 import com.almamatcher.model.exceptions.EmailAlreadyInUseException;
 import com.almamatcher.model.exceptions.EmailDomainNotAllowedException;
+import com.almamatcher.model.exceptions.ExpiredVerificationTokenException;
+import com.almamatcher.model.exceptions.InvalidVerificationTokenException;
 import com.almamatcher.model.exceptions.NotAdultEnoughException;
 import com.almamatcher.model.exceptions.UsernameAlreadyTakenException;
 import com.almamatcher.repository.AccountRepository;
@@ -123,6 +126,26 @@ public class RegistrationService {
         eventPublisher.publishEvent(
             new AccountRegisteredEvent(account.getEmail(), token.getToken())
         );
+    }
+
+    @Transactional
+    public void verify(final String rawToken) {
+        final Instant now = Instant.now();
+        final EmailVerificationToken token = tokenRepository
+                .findByToken(rawToken)
+                .orElseThrow(InvalidVerificationTokenException::new);
+        if (token.isUsed()) {
+            return;
+        }
+        if (token.isExpired(now)) {
+            throw new ExpiredVerificationTokenException();
+        }
+        token.markAsUsed(now);
+        token.getAccount().verifyEmail();
+        // tokenRepository.delete(t);
+        final List<EmailVerificationToken> others = 
+                tokenRepository.findByAccountIdAndUsedAtIsNull(token.getAccount().getId());
+        others.forEach(t -> t.markAsUsed(now));
     }
 
 }
