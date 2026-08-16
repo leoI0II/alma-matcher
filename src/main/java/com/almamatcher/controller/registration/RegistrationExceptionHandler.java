@@ -10,6 +10,8 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import com.almamatcher.model.exceptions.EmailAlreadyInUseException;
 import com.almamatcher.model.exceptions.EmailDomainNotAllowedException;
+import com.almamatcher.model.exceptions.ExpiredVerificationTokenException;
+import com.almamatcher.model.exceptions.InvalidVerificationTokenException;
 import com.almamatcher.model.exceptions.NotAdultEnoughException;
 import com.almamatcher.model.exceptions.UsernameAlreadyTakenException;
 
@@ -17,16 +19,18 @@ import com.almamatcher.model.exceptions.UsernameAlreadyTakenException;
 public class RegistrationExceptionHandler {
     @ExceptionHandler({
         UsernameAlreadyTakenException.class,
-        EmailAlreadyInUseException.class,
+        EmailAlreadyInUseException.class
     })
     @ResponseStatus(HttpStatus.CONFLICT)
     public Map<String, Object> handleConflict(final RuntimeException exception) {
         return body(exception.getMessage());
     }
-
+    
     @ExceptionHandler({
         NotAdultEnoughException.class,
-        EmailDomainNotAllowedException.class
+        EmailDomainNotAllowedException.class,
+        ExpiredVerificationTokenException.class,
+        InvalidVerificationTokenException.class
     })
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     public Map<String, Object> handleBadRequest(final RuntimeException exception) {
