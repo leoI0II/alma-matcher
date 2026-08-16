@@ -1251,6 +1251,14 @@ Each of these was a conscious decision to postpone, not an oversight.
 5. **`AlmaMatcherProperties.Username` is unused** — `RegistrationRequest`
    duplicates the constraints. Wire it or delete it.
 6. Put the @Primary annotation or Profile("dev"/"prod") to the email sender service.
+7. Invalidare gli altri token dello stesso account.
+8. baseUrl/verified 200 OK status response page todo.
+9. Se l utente ha richiesto un paio di volte la registrazione, esistono un paio 
+   di token nella repo. cio significa che nella tabella, dopo che uno di loro
+   e' stato verificato, gli altri rimangono appesi. Marcarli tutti.
+10. Scheduled per eliminare i token dopo ogni X giorni/settimane per non accumulare
+   memoria per link gia scaduti.
+
 
 
 ### Next step
