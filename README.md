@@ -4,8 +4,9 @@ A closed social platform for University of Bologna students — meet people and
 organise events, with registration restricted to verified university email
 addresses.
 
-> **Status: early development.** Nothing is functional yet. The project skeleton
-> is in place; the domain model is being designed.
+> **Status: in development.** Registration and email verification work end to
+> end. There is no login, no frontend, and no dating or events functionality
+> yet.
 
 ---
 
@@ -39,7 +40,8 @@ it works at all; an events board is useful with thirty.
 | Language | Java 21 |
 | Framework | Spring Boot 4 |
 | Persistence | Spring Data JPA (Hibernate) |
-| Database | PostgreSQL |
+| Database | PostgreSQL 17 (Docker Compose) |
+| Security | Spring Security (BCrypt, session-based) |
 | Build | Gradle (Kotlin DSL) |
 | Frontend | not decided — mobile-first PWA planned |
 
@@ -50,35 +52,69 @@ client. Sessions are the Spring Security default and, more importantly, can be
 revoked instantly — a banned account loses access immediately rather than
 whenever its token happens to expire.
 
+**`Account` and `Profile` are separate entities.** `Account` holds permanent
+identity (email, username, password hash, status); `Profile` holds mutable,
+public-facing content. Rendering someone's profile never loads their
+credentials, because those fields simply aren't there.
+
+**Verification emails are sent after the transaction commits.** Registration
+publishes an application event consumed by a `@TransactionalEventListener` at
+`AFTER_COMMIT`, so a slow or failing mail provider can never roll back a
+registration — and a rolled-back registration never sends an email.
+
 **Polling for chat, not WebSockets.** A message table plus a periodic fetch is
 indistinguishable from real-time at this scale, and it can be upgraded later
 without touching the data model.
-
-**Flyway from the first commit.** Schema changes are versioned, never applied
-implicitly by Hibernate.
 
 ---
 
 ## Running locally
 
-Requires JDK 21 and a running PostgreSQL instance.
+Requires JDK 21 and Docker.
 
 ```bash
 git clone https://github.com/<user>/alma-matcher.git
 cd alma-matcher
-./gradlew bootRun
+
+docker compose up -d      # PostgreSQL on :5432
+./gradlew bootRun         # app on :8080
 ```
 
-Database connection settings go in `src/main/resources/application.yml`.
+Registering a user:
+
+```bash
+curl -i -X POST http://localhost:8080/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"mario.rossi@studio.unibo.it","username":"mario_r",
+       "password":"a-long-enough-password","firstName":"Mario",
+       "lastName":"Rossi","birthDate":"2003-04-15"}'
+```
+
+No mail provider is wired in yet: the verification link is written to the
+application log by `LoggingEmailSender`. Open it to activate the account.
+
+Configuration lives in `src/main/resources/application.yaml` — database
+connection, allowed email domains, username rules and token validity.
+
+---
+
+## Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/auth/register` | Create an account. `201`, or `400`/`409` with a JSON error body. |
+| `GET` | `/api/auth/verify?token=…` | Activate an account and redirect to a confirmation page. |
 
 ---
 
 ## Roadmap
 
-- [x] Project skeleton
-- [ ] Domain model
-- [ ] Database setup and migrations
-- [ ] Registration with email verification
+- [x] Domain model — `Account`, `Profile`, `EmailVerificationToken`
+- [x] Registration — domain check, duplicate detection, minimum age, BCrypt
+- [x] Email verification — token issuance and confirmation
+- [ ] Login and logout
+- [ ] Flyway migrations
+- [ ] Real email provider
 - [ ] User profiles
 - [ ] Events
 - [ ] Matching
